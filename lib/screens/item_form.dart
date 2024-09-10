@@ -14,7 +14,8 @@ class ItemForm extends StatefulWidget {
 
 class _ItemFormState extends State<ItemForm> {
   final _nameController = TextEditingController();
-  final _priceController = TextEditingController();
+  final _buyingPriceController = TextEditingController();
+  final _sellingPriceController = TextEditingController();
   final _stockController = TextEditingController();
   File? _image;
 
@@ -22,9 +23,10 @@ class _ItemFormState extends State<ItemForm> {
   void initState() {
     super.initState();
     if (widget.item != null) {
-      _nameController.text = widget.item!['name'];
-      _priceController.text = widget.item!['price'].toString();
-      _stockController.text = widget.item!['stock'].toString();
+      _nameController.text = widget.item!['name'] ?? '';
+      _buyingPriceController.text = widget.item!['buyingPrice']?.toString() ?? '';
+      _sellingPriceController.text = widget.item!['sellingPrice']?.toString() ?? '';
+      _stockController.text = widget.item!['stock']?.toString() ?? '';
       if (widget.item!['image'] != null) {
         _image = File(widget.item!['image']);
       }
@@ -65,8 +67,13 @@ class _ItemFormState extends State<ItemForm> {
                 decoration: const InputDecoration(labelText: 'Name'),
               ),
               TextField(
-                controller: _priceController,
-                decoration: const InputDecoration(labelText: 'Price'),
+                controller: _buyingPriceController,
+                decoration: const InputDecoration(labelText: 'Buying Price'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: _sellingPriceController,
+                decoration: const InputDecoration(labelText: 'Selling Price'),
                 keyboardType: TextInputType.number,
               ),
               TextField(
@@ -99,15 +106,26 @@ class _ItemFormState extends State<ItemForm> {
 
   void _saveItem() async {
     if (_nameController.text.isEmpty ||
-        _priceController.text.isEmpty ||
+        _buyingPriceController.text.isEmpty ||
+        _sellingPriceController.text.isEmpty ||
         _stockController.text.isEmpty) {
       _showErrorDialog('All fields are required.');
       return;
     }
 
+    final itemName = _nameController.text;
+
+    // Check for duplicate item by name
+    final existingItem = await DatabaseHelper.instance.getItemByName(itemName);
+    if (existingItem != null && widget.item == null) {
+      _showErrorDialog('An item with the same name already exists.');
+      return;
+    }
+
     final item = {
-      'name': _nameController.text,
-      'price': double.tryParse(_priceController.text) ?? 0,
+      'name': itemName,
+      'buyingPrice': double.tryParse(_buyingPriceController.text) ?? 0.0,
+      'sellingPrice': double.tryParse(_sellingPriceController.text) ?? 0.0,
       'stock': int.tryParse(_stockController.text) ?? 0,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
       'image': _image?.path, // Store the image path if available
@@ -117,8 +135,7 @@ class _ItemFormState extends State<ItemForm> {
       if (widget.item == null) {
         await DatabaseHelper.instance.insert(item);
       } else {
-        await DatabaseHelper.instance
-            .update({...item, 'id': widget.item!['id']});
+        await DatabaseHelper.instance.update({...item, 'id': widget.item!['id']});
       }
       if (mounted) {
         Navigator.pop(context, true);

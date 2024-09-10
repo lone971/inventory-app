@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:inventoryapp/screens/item_list.dart';
-import 'package:inventoryapp/screens/dashboard.dart';
+import 'package:inventoryapp/screens/dashboard.dart'; // Re-import Dashboard screen
 import 'package:inventoryapp/screens/item_update.dart';
 import 'package:inventoryapp/screens/item_form.dart';
 
@@ -61,8 +61,8 @@ class MyApp extends StatelessWidget {
         switch (settings.name) {
           case '/':
             return MaterialPageRoute(builder: (context) => const ItemList());
-          case '/dashboard':
-            return MaterialPageRoute(builder: (context) => const Dashboard());
+          case '/dashboard': // Add Dashboard route
+            return MaterialPageRoute(builder: (context) =>  Dashboard());
           case '/item_update':
           // Extract arguments for ItemUpdate
             final args = settings.arguments as Map<String, dynamic>;

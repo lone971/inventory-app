@@ -1,131 +1,268 @@
+// lib/screens/dashboard.dart
 import 'package:flutter/material.dart';
-import 'package:inventoryapp/db/database_helper.dart';
-import 'package:fl_chart/fl_chart.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:logging/logging.dart';
+
+import '../models/item.dart';
+import '../db/database_helper.dart';
 
 class Dashboard extends StatefulWidget {
-  const Dashboard({super.key});
-
   @override
   _DashboardState createState() => _DashboardState();
 }
 
 class _DashboardState extends State<Dashboard> {
-  late Future<Map<String, dynamic>> _summaryData;
+  final DatabaseHelper _dbHelper = DatabaseHelper.instance;
+  List<Item> _items = [];
+  bool _isLoading = true;
+
+  // Set up logging
+  final Logger _logger = Logger('Dashboard');
 
   @override
   void initState() {
     super.initState();
-    _summaryData = _fetchSummaryData();
+    _fetchItems();
   }
 
-  Future<Map<String, dynamic>> _fetchSummaryData() async {
-    final dailySummary = await DatabaseHelper.instance.getDailySummary();
-    final weeklySummary = await DatabaseHelper.instance.getWeeklySummary();
-    final monthlySummary = await DatabaseHelper.instance.getMonthlySummary();
-    final mostSold = await DatabaseHelper.instance.getMostSoldItem();
-    final leastSold = await DatabaseHelper.instance.getLeastSoldItem();
-    final mediumSold = await DatabaseHelper.instance.getMediumSoldItem();
+  // Fetch items from the database
+  Future<void> _fetchItems() async {
+    try {
+      List<Map<String, dynamic>> maps = await _dbHelper.queryAll();
+      List<Item> items = maps.map((map) => Item.fromMap(map)).toList();
+      setState(() {
+        _items = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      _logger.severe('Error fetching items: $e');
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load items')),
+      );
+    }
+  }
 
-    return {
-      'daily': dailySummary,
-      'weekly': weeklySummary,
-      'monthly': monthlySummary,
-      'mostSold': mostSold,
-      'leastSold': leastSold,
-      'mediumSold': mediumSold,
-    };
+  // Export data to PDF
+  Future<void> _exportToPdf() async {
+    final pdf = pw.Document();
+    final List<List<String>> items = [];
+    final Map<int, Map<String, dynamic>> summary = {};
+
+    // Prepare item rows and calculate summary
+    for (var item in _items) {
+      final totalProfit = item.sold * (item.sellingPrice - item.buyingPrice);
+      final row = [
+        item.id.toString(),
+        item.name,
+        'KSH ${item.buyingPrice.toStringAsFixed(2)}',
+        'KSH ${item.sellingPrice.toStringAsFixed(2)}',
+        item.stock.toString(),
+        item.sold.toString(),
+        'KSH ${totalProfit.toStringAsFixed(2)}',
+      ];
+      items.add(row);
+
+      // Update summary
+      if (summary.containsKey(item.id)) {
+        summary[item.id]!['totalSold'] += item.sold;
+        summary[item.id]!['totalProfit'] += totalProfit;
+      } else {
+        summary[item.id] = {
+          'name': item.name,
+          'totalSold': item.sold,
+          'totalProfit': totalProfit,
+        };
+      }
+    }
+
+    pdf.addPage(
+      pw.Page(
+        build: (pw.Context context) {
+          return pw.Padding(
+            padding: const pw.EdgeInsets.all(16.0),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('Item Summary Report',
+                    style: pw.TextStyle(
+                        fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 20),
+                pw.Table.fromTextArray(
+                  headers: [
+                    'ID',
+                    'Name',
+                    'Buying Price',
+                    'Selling Price',
+                    'Stock',
+                    'Sold',
+                    'Total Profit'
+                  ],
+                  data: items,
+                  border: pw.TableBorder.all(),
+                  headerStyle: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+                  headerDecoration:
+                  pw.BoxDecoration(color: PdfColors.blueGrey),
+                  cellAlignment: pw.Alignment.centerLeft,
+                  cellPadding: const pw.EdgeInsets.symmetric(
+                      vertical: 4, horizontal: 8),
+                ),
+                pw.SizedBox(height: 20),
+                pw.Text('Overall Summary',
+                    style: pw.TextStyle(
+                        fontSize: 20, fontWeight: pw.FontWeight.bold)),
+                pw.SizedBox(height: 10),
+                for (var entry in summary.entries)
+                  pw.Text(
+                      'Item: ${entry.value['name']} - Total Sold: ${entry.value['totalSold']} - Total Profit: KSH ${entry.value['totalProfit'].toStringAsFixed(2)}',
+                      style: pw.TextStyle(fontSize: 16)),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      final outputFile = await _getOutputFile();
+      final file = File(outputFile);
+      await file.writeAsBytes(await pdf.save());
+
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => pdf.save(),
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF exported successfully')),
+      );
+    } catch (e) {
+      _logger.severe('Error exporting PDF: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to export PDF')),
+      );
+    }
+  }
+
+  // Get the output file path
+  Future<String> _getOutputFile() async {
+    final directory = await getApplicationDocumentsDirectory();
+    return '${directory.path}/inventory_summary_report.pdf';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Dashboard'),
+        title: Text('Dashboard'),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.file_download),
+            tooltip: 'Export to PDF',
+            onPressed: _exportToPdf,
+          ),
+          IconButton(
+            icon: Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: _fetchItems,
+          ),
+        ],
       ),
-      body: FutureBuilder<Map<String, dynamic>>(
-        future: _summaryData,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-
-          if (!snapshot.hasData) {
-            return const Center(child: Text('No summary data available.'));
-          }
-
-          final data = snapshot.data!;
-          final pieChartData = _preparePieChartData(data);
-
-          return ListView(
-            padding: const EdgeInsets.all(16.0),
-            children: <Widget>[
-              _buildSummarySection('Daily Summary', data['daily']),
-              _buildSummarySection('Weekly Summary', data['weekly']),
-              _buildSummarySection('Monthly Summary', data['monthly']),
-              _buildSummaryItem('Most Sold Item', data['mostSold']),
-              _buildSummaryItem('Least Sold Item', data['leastSold']),
-              _buildSummaryItem('Medium Sold Item', data['mediumSold']),
-              const SizedBox(height: 20),
-              _buildPieChart(pieChartData),
-            ],
-          );
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator())
+          : _items.isEmpty
+          ? Center(child: Text('No items found'))
+          : Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('ID')),
+                  DataColumn(label: Text('Name')),
+                  DataColumn(label: Text('Buying Price')),
+                  DataColumn(label: Text('Selling Price')),
+                  DataColumn(label: Text('Stock')),
+                  DataColumn(label: Text('Sold')),
+                  DataColumn(label: Text('Total Profit')),
+                ],
+                rows: _items.map((item) {
+                  final totalProfit = item.sold *
+                      (item.sellingPrice - item.buyingPrice);
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(item.id.toString())),
+                      DataCell(Text(item.name)),
+                      DataCell(Text(
+                          'KSH ${item.buyingPrice.toStringAsFixed(2)}')),
+                      DataCell(Text(
+                          'KSH ${item.sellingPrice.toStringAsFixed(2)}')),
+                      DataCell(Text(item.stock.toString())),
+                      DataCell(Text(item.sold.toString())),
+                      DataCell(Text(
+                          'KSH ${totalProfit.toStringAsFixed(2)}')),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          _buildSummaryTable(),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        child: Icon(Icons.add),
+        tooltip: 'Add New Item',
+        onPressed: () {
+          // Navigate to Add Item screen (to be implemented)
         },
       ),
     );
   }
 
-  Map<String, double> _preparePieChartData(Map<String, dynamic> data) {
-    return {
-      'Most Sold': data['mostSold']['totalSold'].toDouble(),
-      'Least Sold': data['leastSold']['totalSold'].toDouble(),
-      'Medium Sold': data['mediumSold']['totalSold'].toDouble(),
-    };
-  }
+  // Build the summary table
+  Widget _buildSummaryTable() {
+    final Map<int, Map<String, dynamic>> summary = {};
 
-  Widget _buildPieChart(Map<String, double> data) {
-    return SizedBox(
-      height: 200,
-      child: PieChart(
-        PieChartData(
-          sections: data.entries.map((entry) {
-            return PieChartSectionData(
-              value: entry.value,
-              title: '${entry.key}\n${entry.value.toStringAsFixed(1)}',
-              radius: 50,
-            );
-          }).toList(),
-          sectionsSpace: 0,
-          centerSpaceRadius: 40,
-        ),
-      ),
-    );
-  }
+    // Calculate summary
+    for (var item in _items) {
+      final totalProfit = item.sold * (item.sellingPrice - item.buyingPrice);
 
-  Widget _buildSummarySection(String title, Map<String, dynamic> summary) {
-    return Card(
-      child: ListTile(
-        title: Text(title),
-        subtitle: Text(
-          'Total Stock: ${summary['totalStock'] ?? 0}\n'
-              'Total Sold: ${summary['totalSold'] ?? 0}\n'
-              'Average Price: ${summary['avgPrice'] ?? 0}',
-        ),
-      ),
-    );
-  }
+      if (summary.containsKey(item.id)) {
+        summary[item.id]!['totalSold'] += item.sold;
+        summary[item.id]!['totalProfit'] += totalProfit;
+      } else {
+        summary[item.id] = {
+          'name': item.name,
+          'totalSold': item.sold,
+          'totalProfit': totalProfit,
+        };
+      }
+    }
 
-  Widget _buildSummaryItem(String title, Map<String, dynamic> item) {
-    return Card(
-      child: ListTile(
-        title: Text(title),
-        subtitle: Text(
-          'Name: ${item['name'] ?? 'N/A'}\n'
-              'Total Sold: ${item['totalSold'] ?? 0}',
-        ),
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Overall Summary',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          SizedBox(height: 10),
+          for (var entry in summary.entries)
+            Text(
+              'Item: ${entry.value['name']} - Total Sold: ${entry.value['totalSold']} - Total Profit: KSH ${entry.value['totalProfit'].toStringAsFixed(2)}',
+              style: TextStyle(fontSize: 16),
+            ),
+        ],
       ),
     );
   }

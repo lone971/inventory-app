@@ -18,6 +18,10 @@ dependencies:
   image_picker: ^1.1.2
   cupertino_icons: ^1.0.6
   fl_chart: ^0.68.0
+  google_fonts: ^6.2.1
+  flutter_svg: ^2.0.10
+  pdf: ^3.6.0 # Check for the latest version
+  printing: ^5.7.0 # Check for the latest version
 
 dev_dependencies:
   flutter_test:

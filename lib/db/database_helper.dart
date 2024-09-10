@@ -4,13 +4,14 @@ import 'package:logging/logging.dart';
 
 class DatabaseHelper {
   static const _databaseName = "inventory.db";
-  static const _databaseVersion = 1;
+  static const _databaseVersion = 2; // Incremented version for schema change
 
   static const table = 'items';
 
   static const columnId = 'id';
   static const columnName = 'name';
-  static const columnPrice = 'price';
+  static const columnBuyingPrice = 'buyingPrice'; // New column
+  static const columnSellingPrice = 'sellingPrice'; // New column
   static const columnStock = 'stock'; // Initial stock
   static const columnSold = 'sold'; // Sold items
   static const columnImage = 'image'; // Image path
@@ -34,20 +35,44 @@ class DatabaseHelper {
     try {
       return await openDatabase(
         join(await getDatabasesPath(), _databaseName),
-        onCreate: (db, version) {
-          return db.execute('''
-            CREATE TABLE $table (
-              $columnId INTEGER PRIMARY KEY AUTOINCREMENT,
-              $columnName TEXT NOT NULL,
-              $columnPrice REAL NOT NULL,
-              $columnStock INTEGER NOT NULL,  -- Initial stock
-              $columnSold INTEGER NOT NULL DEFAULT 0,  -- Sold items
-              $columnImage TEXT,  -- Image path
-              $columnTimestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))  -- Unix timestamp
-            )
-          ''');
-        },
         version: _databaseVersion,
+        onCreate: (db, version) async {
+          try {
+            await db.execute('''
+              CREATE TABLE $table (
+                $columnId INTEGER PRIMARY KEY AUTOINCREMENT,
+                $columnName TEXT NOT NULL,
+                $columnBuyingPrice REAL NOT NULL,
+                $columnSellingPrice REAL NOT NULL,
+                $columnStock INTEGER NOT NULL,
+                $columnSold INTEGER NOT NULL DEFAULT 0,
+                $columnImage TEXT,
+                $columnTimestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+              )
+            ''');
+            _logger.info('Table $table created successfully.');
+          } catch (e) {
+            _logger.severe('Error creating table: $e');
+            rethrow;
+          }
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            try {
+              await db.execute('''
+                ALTER TABLE $table ADD COLUMN $columnBuyingPrice REAL NOT NULL DEFAULT 0;
+              ''');
+              await db.execute('''
+                ALTER TABLE $table ADD COLUMN $columnSellingPrice REAL NOT NULL DEFAULT 0;
+              ''');
+              _logger.info('Database upgraded to version $newVersion: Added new columns.');
+            } catch (e) {
+              _logger.severe('Error upgrading database: $e');
+              rethrow;
+            }
+          }
+          // Future migrations can be handled here by checking the version
+        },
       );
     } catch (e) {
       _logger.severe('Error initializing database: $e');
@@ -97,111 +122,23 @@ class DatabaseHelper {
     }
   }
 
-
-  Future<Map<String, dynamic>> getDailySummary() async {
-  Database db = await instance.database;
-  final today = DateTime.now();
-  final startOfDay = DateTime(today.year, today.month, today.day).millisecondsSinceEpoch ~/ 1000;
-  final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).millisecondsSinceEpoch ~/ 1000;
-
-  final result = await db.rawQuery('''
-      SELECT 
-        SUM($columnStock) as totalStock, 
-        SUM($columnSold) as totalSold, 
-        AVG($columnPrice) as avgPrice
-      FROM $table
-      WHERE $columnTimestamp BETWEEN ? AND ?
-    ''', [startOfDay, endOfDay]);
-
-  return result.isNotEmpty ? result.first : {};
-  }
-
-  Future<Map<String, dynamic>> getWeeklySummary() async {
-  Database db = await instance.database;
-  final today = DateTime.now();
-  final startOfWeek = today.subtract(Duration(days: today.weekday - 1));
-  final startOfWeekMillis = startOfWeek.millisecondsSinceEpoch ~/ 1000;
-  final endOfWeekMillis = today.add(Duration(days: 7 - today.weekday)).millisecondsSinceEpoch ~/ 1000;
-
-  final result = await db.rawQuery('''
-      SELECT 
-        SUM($columnStock) as totalStock, 
-        SUM($columnSold) as totalSold, 
-        AVG($columnPrice) as avgPrice
-      FROM $table
-      WHERE $columnTimestamp BETWEEN ? AND ?
-    ''', [startOfWeekMillis, endOfWeekMillis]);
-
-  return result.isNotEmpty ? result.first : {};
-  }
-
-  Future<Map<String, dynamic>> getMonthlySummary() async {
-  Database db = await instance.database;
-  final today = DateTime.now();
-  final startOfMonth = DateTime(today.year, today.month, 1);
-  final startOfMonthMillis = startOfMonth.millisecondsSinceEpoch ~/ 1000;
-  final endOfMonthMillis = DateTime(today.year, today.month + 1, 0, 23, 59, 59).millisecondsSinceEpoch ~/ 1000;
-
-  final result = await db.rawQuery('''
-      SELECT 
-        SUM($columnStock) as totalStock, 
-        SUM($columnSold) as totalSold, 
-        AVG($columnPrice) as avgPrice
-      FROM $table
-      WHERE $columnTimestamp BETWEEN ? AND ?
-    ''', [startOfMonthMillis, endOfMonthMillis]);
-
-  return result.isNotEmpty ? result.first : {};
-  }
-
-  Future<Map<String, dynamic>> getMostSoldItem() async {
-  Database db = await instance.database;
-  final result = await db.rawQuery('''
-      SELECT 
-        $columnName, 
-        SUM($columnSold) as totalSold
-      FROM $table
-      GROUP BY $columnName
-      ORDER BY totalSold DESC
-      LIMIT 1
-    ''');
-
-  return result.isNotEmpty ? result.first : {};
-  }
-
-  Future<Map<String, dynamic>> getLeastSoldItem() async {
-  Database db = await instance.database;
-  final result = await db.rawQuery('''
-      SELECT 
-        $columnName, 
-        SUM($columnSold) as totalSold
-      FROM $table
-      GROUP BY $columnName
-      ORDER BY totalSold ASC
-      LIMIT 1
-    ''');
-
-  return result.isNotEmpty ? result.first : {};
-  }
-
-  Future<Map<String, dynamic>> getMediumSoldItem() async {
-  Database db = await instance.database;
-  final result = await db.rawQuery('''
-      SELECT 
-        $columnName, 
-        SUM($columnSold) as totalSold
-      FROM $table
-      GROUP BY $columnName
-      ORDER BY ABS(totalSold - (SELECT AVG(totalSold) FROM (
-        SELECT SUM($columnSold) as totalSold
-        FROM $table
-        GROUP BY $columnName
-      ))) 
-      LIMIT 1
-    ''');
-
-  return result.isNotEmpty ? result.first : {};
+  // Method to retrieve an item by its name
+  Future<Map<String, dynamic>?> getItemByName(String name) async {
+    Database db = await instance.database;
+    try {
+      List<Map<String, dynamic>> result = await db.query(
+        table,
+        where: '$columnName = ?',
+        whereArgs: [name],
+      );
+      if (result.isNotEmpty) {
+        return result.first;
+      } else {
+        return null;
+      }
+    } catch (e) {
+      _logger.severe('Error retrieving item by name: $e');
+      rethrow;
+    }
   }
 }
-
-
